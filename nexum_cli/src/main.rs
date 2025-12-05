@@ -1,4 +1,4 @@
-use nexum_core::{StorageEngine, Parser, Executor, Catalog, NLTranslator};
+use nexum_core::{Catalog, Executor, NLTranslator, Parser, StorageEngine};
 use std::io::{self, Write};
 
 fn main() -> anyhow::Result<()> {
@@ -8,7 +8,7 @@ fn main() -> anyhow::Result<()> {
     let storage = StorageEngine::new("./nexumdb_data")?;
     let executor = Executor::new(storage.clone()).with_cache();
     let catalog = Catalog::new(storage);
-    
+
     let nl_translator = match NLTranslator::new() {
         Ok(translator) => {
             println!("Natural Language translator enabled");
@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
             None
         }
     };
-    
+
     println!("Ready. Commands:");
     println!("  - SQL: Type any SQL query (CREATE TABLE, INSERT, SELECT)");
     println!("  - ASK: Type 'ASK <question>' for natural language queries");
@@ -31,13 +31,13 @@ fn main() -> anyhow::Result<()> {
 
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
-        
+
         let input = input.trim();
-        
+
         if input.is_empty() {
             continue;
         }
-        
+
         if input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
             println!("Goodbye!");
             break;
@@ -45,27 +45,25 @@ fn main() -> anyhow::Result<()> {
 
         if input.to_uppercase().starts_with("ASK ") {
             let natural_query = input[4..].trim();
-            
+
             if let Some(ref translator) = nl_translator {
                 let schema = get_schema_context(&catalog);
-                
+
                 println!("Translating: '{}'", natural_query);
                 match translator.translate(natural_query, &schema) {
                     Ok(sql) => {
                         println!("Generated SQL: {}", sql);
                         println!();
-                        
+
                         match Parser::parse(&sql) {
-                            Ok(statement) => {
-                                match executor.execute(statement) {
-                                    Ok(result) => {
-                                        println!("{:?}", result);
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Execution error: {}", e);
-                                    }
+                            Ok(statement) => match executor.execute(statement) {
+                                Ok(result) => {
+                                    println!("{:?}", result);
                                 }
-                            }
+                                Err(e) => {
+                                    eprintln!("Execution error: {}", e);
+                                }
+                            },
                             Err(e) => {
                                 eprintln!("Parse error: {}", e);
                             }
@@ -82,16 +80,14 @@ fn main() -> anyhow::Result<()> {
         }
 
         match Parser::parse(input) {
-            Ok(statement) => {
-                match executor.execute(statement) {
-                    Ok(result) => {
-                        println!("{:?}", result);
-                    }
-                    Err(e) => {
-                        eprintln!("Execution error: {}", e);
-                    }
+            Ok(statement) => match executor.execute(statement) {
+                Ok(result) => {
+                    println!("{:?}", result);
                 }
-            }
+                Err(e) => {
+                    eprintln!("Execution error: {}", e);
+                }
+            },
             Err(e) => {
                 eprintln!("Parse error: {}", e);
             }
@@ -108,7 +104,9 @@ fn get_schema_context(catalog: &Catalog) -> String {
             for table_name in tables {
                 if let Ok(Some(table_schema)) = catalog.get_table(&table_name) {
                     schema.push_str(&format!("TABLE {} (", table_schema.name));
-                    let columns: Vec<String> = table_schema.columns.iter()
+                    let columns: Vec<String> = table_schema
+                        .columns
+                        .iter()
                         .map(|c| format!("{} {:?}", c.name, c.data_type))
                         .collect();
                     schema.push_str(&columns.join(", "));

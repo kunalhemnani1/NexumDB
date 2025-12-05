@@ -1,0 +1,75 @@
+name: Bug report
+description: File a bug report to help us improve NexumDB
+labels: [bug]
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A clear and concise description of the problem.
+      placeholder: The database crashes when executing SELECT ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Provide a minimal set of steps or a query to trigger the issue.
+      placeholder: |
+        1. Run nexum
+        2. Execute: SELECT * FROM users WHERE ...
+        3. Observe error output
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened (include full error messages or logs).
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Rust version, Python version, NexumDB version/commit.
+      placeholder: |
+        - OS: Ubuntu 22.04
+        - Rust: 1.74
+        - Python: 3.11
+        - Commit: abc123
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and Traces
+      description: Paste relevant logs (wrap in triple backticks) or attach files.
+      render: shell
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow our Code of Conduct.
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true

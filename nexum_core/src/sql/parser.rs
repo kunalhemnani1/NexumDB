@@ -10,11 +10,11 @@ impl Parser {
     pub fn parse(sql: &str) -> Result<Statement> {
         let dialect = GenericDialect {};
         let statements = SqlParser::parse_sql(&dialect, sql)?;
-        
+
         if statements.is_empty() {
             return Err(anyhow!("No statements found"));
         }
-        
+
         let stmt = &statements[0];
         Self::convert_statement(stmt)
     }
@@ -25,7 +25,7 @@ impl Parser {
                 let table_name = name.to_string();
                 let cols = columns
                     .iter()
-                    .map(|c| Self::convert_column(c))
+                    .map(Self::convert_column)
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Statement::CreateTable {
                     name: table_name,
@@ -40,19 +40,21 @@ impl Parser {
             } => {
                 let table = table_name.to_string();
                 let col_names = columns.iter().map(|c| c.to_string()).collect();
-                
+
                 let values = if let ast::SetExpr::Values(values) = &*source.body {
-                    values.rows.iter()
+                    values
+                        .rows
+                        .iter()
                         .map(|row| {
                             row.iter()
-                                .map(|expr| Self::convert_expr(expr))
+                                .map(Self::convert_expr)
                                 .collect::<Result<Vec<_>>>()
                         })
                         .collect::<Result<Vec<_>>>()?
                 } else {
                     return Err(anyhow!("Unsupported INSERT format"));
                 };
-                
+
                 Ok(Statement::Insert {
                     table,
                     columns: col_names,
@@ -61,17 +63,20 @@ impl Parser {
             }
             SqlStatement::Query(query) => {
                 if let ast::SetExpr::Select(select) = &*query.body {
-                    let table = if let Some(ast::TableWithJoins { relation, .. }) = select.from.first() {
-                        if let ast::TableFactor::Table { name, .. } = relation {
-                            name.to_string()
+                    let table =
+                        if let Some(ast::TableWithJoins { relation, .. }) = select.from.first() {
+                            if let ast::TableFactor::Table { name, .. } = relation {
+                                name.to_string()
+                            } else {
+                                return Err(anyhow!("Unsupported table reference"));
+                            }
                         } else {
-                            return Err(anyhow!("Unsupported table reference"));
-                        }
-                    } else {
-                        return Err(anyhow!("No table specified"));
-                    };
-                    
-                    let columns = select.projection.iter()
+                            return Err(anyhow!("No table specified"));
+                        };
+
+                    let columns = select
+                        .projection
+                        .iter()
                         .map(|proj| match proj {
                             ast::SelectItem::Wildcard(_) => "*".to_string(),
                             ast::SelectItem::UnnamedExpr(expr) => format!("{}", expr),
@@ -79,19 +84,25 @@ impl Parser {
                             _ => "unknown".to_string(),
                         })
                         .collect();
-                    
+
                     let where_clause = select.selection.as_ref().map(|expr| Box::new(expr.clone()));
-                    
+
                     let order_by = if !query.order_by.is_empty() {
-                        Some(query.order_by.iter().map(|order| {
-                            let column = format!("{}", order.expr);
-                            let ascending = order.asc.unwrap_or(true);
-                            crate::sql::types::OrderByClause { column, ascending }
-                        }).collect())
+                        Some(
+                            query
+                                .order_by
+                                .iter()
+                                .map(|order| {
+                                    let column = format!("{}", order.expr);
+                                    let ascending = order.asc.unwrap_or(true);
+                                    crate::sql::types::OrderByClause { column, ascending }
+                                })
+                                .collect(),
+                        )
                     } else {
                         None
                     };
-                    
+
                     let limit = query.limit.as_ref().and_then(|limit_expr| {
                         if let ast::Expr::Value(ast::Value::Number(n, _)) = limit_expr {
                             n.parse().ok()
@@ -99,7 +110,7 @@ impl Parser {
                             None
                         }
                     });
-                    
+
                     Ok(Statement::Select {
                         table,
                         columns,
@@ -123,11 +134,14 @@ impl Parser {
 
     fn convert_data_type(data_type: &SqlDataType) -> Result<DataType> {
         match data_type {
-            SqlDataType::Int(_) | SqlDataType::Integer(_) | SqlDataType::BigInt(_) => Ok(DataType::Integer),
-            SqlDataType::Float(_) | SqlDataType::Double | SqlDataType::Real => Ok(DataType::Float),
-            SqlDataType::Text | SqlDataType::Varchar(_) | SqlDataType::Char(_) | SqlDataType::String(_) => {
-                Ok(DataType::Text)
+            SqlDataType::Int(_) | SqlDataType::Integer(_) | SqlDataType::BigInt(_) => {
+                Ok(DataType::Integer)
             }
+            SqlDataType::Float(_) | SqlDataType::Double | SqlDataType::Real => Ok(DataType::Float),
+            SqlDataType::Text
+            | SqlDataType::Varchar(_)
+            | SqlDataType::Char(_)
+            | SqlDataType::String(_) => Ok(DataType::Text),
             SqlDataType::Boolean => Ok(DataType::Boolean),
             _ => Err(anyhow!("Unsupported data type: {:?}", data_type)),
         }
@@ -142,9 +156,8 @@ impl Parser {
                     Ok(Value::Integer(n.parse()?))
                 }
             }
-            Expr::Value(ast::Value::SingleQuotedString(s)) | Expr::Value(ast::Value::DoubleQuotedString(s)) => {
-                Ok(Value::Text(s.clone()))
-            }
+            Expr::Value(ast::Value::SingleQuotedString(s))
+            | Expr::Value(ast::Value::DoubleQuotedString(s)) => Ok(Value::Text(s.clone())),
             Expr::Value(ast::Value::Boolean(b)) => Ok(Value::Boolean(*b)),
             Expr::Value(ast::Value::Null) => Ok(Value::Null),
             _ => Err(anyhow!("Unsupported expression: {:?}", expr)),
@@ -160,7 +173,7 @@ mod tests {
     fn test_parse_create_table() {
         let sql = "CREATE TABLE users (id INTEGER, name TEXT, age INTEGER)";
         let stmt = Parser::parse(sql).unwrap();
-        
+
         match stmt {
             Statement::CreateTable { name, columns } => {
                 assert_eq!(name, "users");
@@ -176,9 +189,13 @@ mod tests {
     fn test_parse_insert() {
         let sql = "INSERT INTO users (id, name) VALUES (1, 'Alice'), (2, 'Bob')";
         let stmt = Parser::parse(sql).unwrap();
-        
+
         match stmt {
-            Statement::Insert { table, columns, values } => {
+            Statement::Insert {
+                table,
+                columns,
+                values,
+            } => {
                 assert_eq!(table, "users");
                 assert_eq!(columns.len(), 2);
                 assert_eq!(values.len(), 2);
@@ -191,7 +208,7 @@ mod tests {
     fn test_parse_select() {
         let sql = "SELECT id, name FROM users";
         let stmt = Parser::parse(sql).unwrap();
-        
+
         match stmt {
             Statement::Select { table, columns, .. } => {
                 assert_eq!(table, "users");

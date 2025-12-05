@@ -4,4 +4,4 @@ pub mod types;
 
 pub use parser::Parser;
 pub use planner::Planner;
-pub use types::{Statement, DataType, Value};
+pub use types::{DataType, Statement, Value};

@@ -4,16 +4,16 @@ use thiserror::Error;
 pub enum StorageError {
     #[error("Failed to open database: {0}")]
     OpenError(String),
-    
+
     #[error("Failed to write to database: {0}")]
     WriteError(String),
-    
+
     #[error("Failed to read from database: {0}")]
     ReadError(String),
-    
+
     #[error("Key not found: {0}")]
     KeyNotFound(String),
-    
+
     #[error("Serialization error: {0}")]
     SerializationError(String),
 }
