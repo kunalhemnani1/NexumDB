@@ -10,11 +10,5 @@ services:
       - RUST_LOG=info
     volumes:
       - ./data:/app/data
-    networks:
-      - app-network
     ports:
       - "8080:8080"
-
-networks:
-  app-network:
-    driver: bridge
