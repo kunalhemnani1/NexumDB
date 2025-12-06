@@ -273,3 +273,12 @@ Contributors will be recognized in:
 ## Thank You!
 
 Your contributions make NexumDB better for everyone. We appreciate your time and effort in helping improve this project!
+
+### Linting GitHub Actions
+
+You can run `actionlint` locally to check GitHub Actions workflows before pushing.
+
+Run using Docker:
+
+```bash
+docker run --rm -v "$(pwd):/repo" -w /repo ghcr.io/rhysd/actionlint:latest -color
