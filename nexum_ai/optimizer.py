@@ -3,7 +3,7 @@ Semantic cache and query optimizer using local embedding models
 """
 
 import numpy as np
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict, Any
 import json
 
 class SemanticCache:
@@ -12,12 +12,12 @@ class SemanticCache:
     Uses local embedding models only
     """
     
-    def __init__(self, similarity_threshold: float = 0.95):
+    def __init__(self, similarity_threshold: float = 0.95) -> None:
         self.cache: List[Dict] = []
         self.similarity_threshold = similarity_threshold
         self.model = None
         
-    def initialize_model(self):
+    def initialize_model(self) -> None:
         """Initialize local embedding model - deferred to avoid import errors"""
         try:
             from sentence_transformers import SentenceTransformer
@@ -71,7 +71,7 @@ class SemanticCache:
         
         return None
     
-    def put(self, query: str, result: str):
+    def put(self, query: str, result: str) -> None:
         """Store query and result in cache"""
         query_vec = self.vectorize(query)
         self.cache.append({
@@ -81,7 +81,7 @@ class SemanticCache:
         })
         print(f"Cached query: {query[:50]}...")
     
-    def clear(self):
+    def clear(self) -> None:
         """Clear the cache"""
         self.cache.clear()
 
@@ -92,7 +92,7 @@ class QueryOptimizer:
     Uses Q-learning to optimize query execution
     """
     
-    def __init__(self, learning_rate: float = 0.1, discount_factor: float = 0.9):
+    def __init__(self, learning_rate: float = 0.1, discount_factor: float = 0.9) -> None:
         self.q_table: Dict[str, Dict[str, float]] = {}
         self.learning_rate = learning_rate
         self.discount_factor = discount_factor
@@ -110,7 +110,7 @@ class QueryOptimizer:
         best_action = max(available_actions, key=lambda a: state_values.get(a, 0.0))
         return best_action
     
-    def update(self, state: str, action: str, reward: float, next_state: str):
+    def update(self, state: str, action: str, reward: float, next_state: str) -> None:
         """Update Q-values based on observed reward"""
         if state not in self.q_table:
             self.q_table[state] = {}
@@ -129,7 +129,7 @@ class QueryOptimizer:
         
         print(f"Updated Q({state}, {action}) = {new_q:.4f}")
     
-    def feed_metrics(self, query: str, latency_ms: float):
+    def feed_metrics(self, query: str, latency_ms: float) -> None:
         """Feed execution metrics to the optimizer"""
         reward = -latency_ms / 1000.0
         
@@ -140,7 +140,7 @@ class QueryOptimizer:
         self.update(state, action, reward, next_state)
 
 
-def test_vectorization():
+def test_vectorization() -> Dict[str, Any]:
     """Test function for Rust integration"""
     cache = SemanticCache()
     test_query = "SELECT * FROM users WHERE age > 25"

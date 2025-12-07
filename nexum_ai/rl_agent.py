@@ -4,7 +4,7 @@ Learns to optimize query execution strategies based on performance metrics
 """
 
 import numpy as np
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional, Any
 import json
 import os
 
@@ -25,7 +25,7 @@ class QLearningAgent:
         epsilon: float = 0.2,
         epsilon_decay: float = 0.995,
         state_file: str = "q_table.pkl"
-    ):
+    ) -> None:
         """
         Initialize Q-learning agent
         
@@ -104,7 +104,7 @@ class QLearningAgent:
         complexity: int,
         action: str,
         latency_ms: float
-    ):
+    ) -> None:
         """
         Update Q-value based on observed reward
         
@@ -158,14 +158,14 @@ class QLearningAgent:
         
         return base_reward
     
-    def decay_epsilon(self):
+    def decay_epsilon(self) -> None:
         """Decay exploration rate after each episode"""
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
             self.episode_count += 1
             print(f"Episode {self.episode_count}: epsilon decayed to {self.epsilon:.4f}")
     
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> Dict[str, float]:
         """Get agent statistics"""
         return {
             'q_table_size': len(self.q_table),
@@ -175,7 +175,7 @@ class QLearningAgent:
             'avg_reward': np.mean([h['reward'] for h in self.training_history[-100:]]) if self.training_history else 0.0
         }
     
-    def save_state(self, filepath: str = None):
+    def save_state(self, filepath: str = None) -> None:
         """Save Q-table and agent state to file using joblib"""
         import joblib
         
@@ -195,7 +195,7 @@ class QLearningAgent:
         except Exception as e:
             print(f"Error saving agent state: {e}")
     
-    def load_state(self, filepath: str = None):
+    def load_state(self, filepath: str = None) -> None:
         """Load Q-table and agent state from file using joblib"""
         import joblib
         import os
@@ -216,7 +216,7 @@ class QLearningAgent:
             print(f"No saved state found at {filepath}, starting fresh")
 
 
-def test_rl_agent():
+def test_rl_agent() -> None:
     """Test the RL agent with simulated queries"""
     agent = QLearningAgent(learning_rate=0.1, epsilon=0.3)
     

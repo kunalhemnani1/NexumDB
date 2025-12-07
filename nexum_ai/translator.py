@@ -4,7 +4,7 @@ Uses llama-cpp-python for local model inference
 """
 
 from llama_cpp import Llama
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import os
 
 
@@ -13,7 +13,7 @@ class NLTranslator:
     Translates natural language queries to SQL using a local quantized LLM
     """
     
-    def __init__(self, model_path: Optional[str] = None, n_ctx: int = 2048):
+    def __init__(self, model_path: Optional[str] = None, n_ctx: int = 2048) -> None:
         """
         Initialize the translator with a local GGUF model
         
@@ -159,7 +159,7 @@ SQL Query:"""
         return "SELECT * FROM table"
 
 
-def test_translator():
+def test_translator() -> None:
     """Test the translator with example queries"""
     translator = NLTranslator()
     
