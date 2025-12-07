@@ -72,6 +72,13 @@ $ docker compose build
 ```bash
 $ docker compose up
 ```
+
+### Run an interactive shell
+
+```bash
+$ docker compose up -d
+$ docker exec -it nexumdb nexum
+```
  
 ### Stop the application 
 
@@ -82,7 +89,7 @@ $ docker compose down
 ### Logs 
 
 ```bash 
-$ docker-compose logs
+$ docker compose logs
 ```
 
 ## Python Dependencies
