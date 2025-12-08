@@ -38,6 +38,9 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
       - name: fmt
         run: cargo fmt --all -- --check
 
@@ -46,6 +49,9 @@ jobs:
 
       - name: tests
         run: cargo test --workspace -- --test-threads=1
+
+      - name: Security audit
+        run: cargo audit
 
   python:
     name: Python syntax check
@@ -57,7 +63,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Byte-compile nexum_ai
         run: python -m compileall nexum_ai
