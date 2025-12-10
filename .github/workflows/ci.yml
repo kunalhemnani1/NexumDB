@@ -87,4 +87,5 @@ jobs:
           flags: python
           name: nexum_ai-coverage
           token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ secrets.CODECOV_TOKEN }}
         if: always()
