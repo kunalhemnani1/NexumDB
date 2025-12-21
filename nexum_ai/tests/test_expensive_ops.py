@@ -150,13 +150,13 @@ class TestMemoryEfficiency:
         cache = SemanticCache()
         cache.model = None
         
-        # Add entries (reduced from 10000 to 100 for CI performance)
-        for i in range(100):
+        # Add many entries
+        for i in range(10000):
             cache.put(f"query{i}", f"result{i}")
         
         # In production, you might want to implement cache eviction
         # For now, just verify it doesn't crash
-        assert len(cache.cache) == 100
+        assert len(cache.cache) == 10000
     
     def test_q_table_memory(self):
         """Test Q-table memory usage"""
@@ -164,8 +164,8 @@ class TestMemoryEfficiency:
         
         agent = QLearningAgent()
         
-        # Create many unique states (reduced iterations for CI)
-        for i in range(50):
+        # Create many unique states
+        for i in range(100):
             for j in range(10):
                 agent.update(i, j % 2 == 0, j, "normal", 10.0)
         
