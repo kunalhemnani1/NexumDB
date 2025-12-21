@@ -107,63 +107,61 @@ class SemanticCache:
             print("Cache file deleted")
     
     def save_cache(self, filepath: Optional[str] = None) -> None:
-        """Save cache to disk using pickle for better performance"""
-        try:
-            import pickle
-        except ImportError:
-            print("Warning: pickle not available, cannot save cache")
-            return
-        
+        """Save cache to disk using JSON format (secure default)"""
         if filepath is None:
             filepath = str(self.cache_path)
         
-        try:
-            # Create backup of existing cache
-            if os.path.exists(filepath):
-                backup_path = f"{filepath}.backup"
-                os.rename(filepath, backup_path)
-            
-            with open(filepath, 'wb') as f:
-                pickle.dump({
-                    'cache': self.cache,
-                    'similarity_threshold': self.similarity_threshold,
-                    'cache_size': len(self.cache)
-                }, f)
-            
-            print(f"Semantic cache saved to {filepath} ({len(self.cache)} entries)")
-            
-            # Remove backup if save was successful
-            backup_path = f"{filepath}.backup"
-            if os.path.exists(backup_path):
-                os.remove(backup_path)
-                
-        except Exception as e:
-            print(f"Error saving semantic cache: {e}")
-            # Restore backup if save failed
-            backup_path = f"{filepath}.backup"
-            if os.path.exists(backup_path):
-                os.rename(backup_path, filepath)
+        # Use JSON format by default for security
+        json_filepath = filepath.replace('.pkl', '.json') if filepath.endswith('.pkl') else filepath
+        self.save_cache_json(json_filepath)
     
     def load_cache(self, filepath: Optional[str] = None) -> None:
-        """Load cache from disk using pickle"""
-        try:
-            import pickle
-        except ImportError:
-            print("Warning: pickle not available, cannot load cache")
-            return
-        
+        """Load cache from disk using JSON (safe) or pickle (legacy)"""
         if filepath is None:
             filepath = str(self.cache_path)
         
-        if os.path.exists(filepath):
+        # Try JSON first (safer format)
+        json_filepath = filepath.replace('.pkl', '.json') if filepath.endswith('.pkl') else f"{filepath}.json"
+        if os.path.exists(json_filepath):
+            self.load_cache_json(json_filepath)
+            return
+        
+        # Fall back to pickle for legacy files (with restricted unpickler for safety)
+        if os.path.exists(filepath) and filepath.endswith('.pkl'):
             try:
+                import pickle
+                import io
+                
+                # Use RestrictedUnpickler to limit allowed classes
+                class RestrictedUnpickler(pickle.Unpickler):
+                    """Restricted unpickler that only allows safe types"""
+                    ALLOWED_CLASSES = {
+                        ('builtins', 'dict'),
+                        ('builtins', 'list'),
+                        ('builtins', 'str'),
+                        ('builtins', 'int'),
+                        ('builtins', 'float'),
+                        ('builtins', 'bool'),
+                        ('builtins', 'tuple'),
+                        ('builtins', 'set'),
+                        ('builtins', 'frozenset'),
+                    }
+                    
+                    def find_class(self, module: str, name: str) -> type:
+                        if (module, name) not in self.ALLOWED_CLASSES:
+                            raise pickle.UnpicklingError(
+                                f"Forbidden class: {module}.{name}"
+                            )
+                        return super().find_class(module, name)
+                
                 with open(filepath, 'rb') as f:
-                    data = pickle.load(f)
+                    data = RestrictedUnpickler(f).load()
                 
                 self.cache = data.get('cache', [])
                 self.similarity_threshold = data.get('similarity_threshold', self.similarity_threshold)
                 
                 print(f"Semantic cache loaded from {filepath} ({len(self.cache)} entries)")
+                print("Note: Converting legacy pickle cache to JSON format for security")
                 
                 # Validate cache entries
                 valid_entries = []
@@ -175,6 +173,9 @@ class SemanticCache:
                 
                 self.cache = valid_entries
                 
+                # Auto-convert to JSON format for future use
+                self.save_cache_json(json_filepath)
+                
             except Exception as e:
                 print(f"Error loading semantic cache: {e}")
                 print("Starting with empty cache")
@@ -183,11 +184,16 @@ class SemanticCache:
             print(f"No cache file found at {filepath}, starting with empty cache")
     
     def save_cache_json(self, filepath: Optional[str] = None) -> None:
-        """Save cache to JSON format (alternative to pickle)"""
+        """Save cache to JSON format (secure and portable)"""
         if filepath is None:
             filepath = str(self.cache_path).replace('.pkl', '.json')
         
         try:
+            # Create backup of existing cache
+            backup_path = f"{filepath}.backup"
+            if os.path.exists(filepath):
+                os.rename(filepath, backup_path)
+            
             cache_data = {
                 'cache': self.cache,
                 'similarity_threshold': self.similarity_threshold,
@@ -198,10 +204,17 @@ class SemanticCache:
             with open(filepath, 'w') as f:
                 json.dump(cache_data, f, indent=2)
             
-            print(f"Semantic cache saved to JSON: {filepath}")
+            print(f"Semantic cache saved to {filepath} ({len(self.cache)} entries)")
+            
+            # Remove backup if save was successful
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
             
         except Exception as e:
             print(f"Error saving cache to JSON: {e}")
+            # Restore backup if save failed
+            if os.path.exists(backup_path):
+                os.rename(backup_path, filepath)
     
     def load_cache_json(self, filepath: Optional[str] = None) -> None:
         """Load cache from JSON format"""
