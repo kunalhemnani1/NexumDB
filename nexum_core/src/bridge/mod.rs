@@ -68,13 +68,17 @@ pub struct SemanticCache {
 
 impl SemanticCache {
     pub fn new() -> Result<Self> {
+        Self::with_cache_file("semantic_cache.pkl")
+    }
+
+    pub fn with_cache_file(cache_file: &str) -> Result<Self> {
         let mut bridge = PythonBridge::new()?;
         bridge.initialize()?;
 
         let cache = Python::with_gil(|py| {
             let nexum_ai = PyModule::import(py, "nexum_ai.optimizer")?;
             let semantic_cache_class = nexum_ai.getattr("SemanticCache")?;
-            let cache_instance = semantic_cache_class.call0()?;
+            let cache_instance = semantic_cache_class.call1((0.95, cache_file))?;
             Ok::<PyObject, PyErr>(cache_instance.unbind())
         })?;
 
@@ -107,6 +111,43 @@ impl SemanticCache {
 
     pub fn vectorize(&self, text: &str) -> Result<Vec<f32>> {
         self.bridge.vectorize(text)
+    }
+
+    pub fn save_cache(&self) -> Result<()> {
+        Python::with_gil(|py| {
+            let cache_bound = self.cache.bind(py);
+            cache_bound.call_method0("save_cache")?;
+            Ok::<(), PyErr>(())
+        })
+        .map_err(|e: PyErr| anyhow!("Python error: {}", e))
+    }
+
+    pub fn load_cache(&self) -> Result<()> {
+        Python::with_gil(|py| {
+            let cache_bound = self.cache.bind(py);
+            cache_bound.call_method0("load_cache")?;
+            Ok::<(), PyErr>(())
+        })
+        .map_err(|e: PyErr| anyhow!("Python error: {}", e))
+    }
+
+    pub fn clear_cache(&self) -> Result<()> {
+        Python::with_gil(|py| {
+            let cache_bound = self.cache.bind(py);
+            cache_bound.call_method0("clear")?;
+            Ok::<(), PyErr>(())
+        })
+        .map_err(|e: PyErr| anyhow!("Python error: {}", e))
+    }
+
+    pub fn get_cache_stats(&self) -> Result<String> {
+        Python::with_gil(|py| {
+            let cache_bound = self.cache.bind(py);
+            let result = cache_bound.call_method0("get_cache_stats")?;
+            let stats_str: String = result.str()?.extract()?;
+            Ok(stats_str)
+        })
+        .map_err(|e: PyErr| anyhow!("Python error: {}", e))
     }
 }
 
@@ -180,22 +221,40 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_cache() {
+    fn test_semantic_cache_persistence() {
         if !check_python_available() {
             println!("Skipping test: Python environment not available");
             return;
         }
 
-        let cache = SemanticCache::new().unwrap();
+        let cache = SemanticCache::with_cache_file("test_rust_cache.pkl").unwrap();
 
-        let query = "SELECT * FROM users";
-        let result = "User data results";
+        let query = "SELECT * FROM users WHERE name = 'test'";
+        let result = "Test user data";
 
+        // Put data in cache
         cache.put(query, result).unwrap();
 
+        // Verify cache hit
         let cached = cache.get(query).unwrap();
         assert!(cached.is_some());
         assert_eq!(cached.unwrap(), result);
+
+        // Test cache stats
+        let stats = cache.get_cache_stats().unwrap();
+        println!("Cache stats: {}", stats);
+
+        // Test save/load cycle
+        cache.save_cache().unwrap();
+        
+        // Create new cache instance and verify persistence
+        let cache2 = SemanticCache::with_cache_file("test_rust_cache.pkl").unwrap();
+        let cached2 = cache2.get(query).unwrap();
+        assert!(cached2.is_some());
+        assert_eq!(cached2.unwrap(), result);
+
+        // Cleanup
+        cache2.clear_cache().unwrap();
     }
 
     #[test]
