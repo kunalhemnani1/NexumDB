@@ -175,8 +175,28 @@ class QLearningAgent:
     
     def explain_action(self, query_length: int, cache_hit: bool, complexity: int) -> Dict[str, Any]:
         """
-        Explain what action would be taken without executing
-        Returns Q-values, state analysis, and predicted action for EXPLAIN command
+        Explain what action would be taken without executing.
+        
+        Returns Q-values, state analysis, and predicted action for EXPLAIN command.
+        This method provides a read-only analysis of the RL agent's decision-making
+        process without actually executing any action or updating the Q-table.
+        
+        Args:
+            query_length: Length of SQL query
+            cache_hit: Whether query hit cache
+            complexity: Complexity score (0-10)
+        
+        Returns:
+            Dict containing:
+                - state: state key string
+                - state_breakdown: dict with query_length_bucket, cache_hit, complexity
+                - q_values: Q-values for all actions
+                - best_action: action with highest Q-value
+                - epsilon: current exploration rate
+                - would_explore: whether exploration is possible
+                - predicted_action: deterministic best action (ignores epsilon-greedy)
+                - explanation: human-readable explanation of agent behavior
+                - agent_stats: total_states_learned, total_updates, episodes
         """
         state = self._get_state_key(query_length, cache_hit, complexity)
         
@@ -189,6 +209,9 @@ class QLearningAgent:
         # Determine best action
         best_action = max(self.actions, key=lambda a: q_values.get(a, 0.0))
         
+        # Truncate best_action for display if needed (defensive limit)
+        best_action_display = best_action[:20] if len(best_action) > 20 else best_action
+        
         return {
             'state': state,
             'state_breakdown': {
@@ -197,11 +220,11 @@ class QLearningAgent:
                 'complexity': complexity
             },
             'q_values': q_values,
-            'best_action': best_action,
+            'best_action': best_action_display,
             'epsilon': round(self.epsilon, 4),
             'would_explore': self.epsilon > 0,
-            'predicted_action': best_action,  # Deterministic for explain
-            'exploration_probability': round(self.epsilon, 4),
+            'predicted_action': best_action_display,  # Deterministic for explain
+            'explanation': f'With ε={self.epsilon:.4f}, agent would explore {self.epsilon*100:.1f}% of the time',
             'agent_stats': {
                 'total_states_learned': len(self.q_table),
                 'total_updates': len(self.training_history),

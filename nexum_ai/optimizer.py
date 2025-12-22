@@ -361,8 +361,24 @@ class QueryOptimizer:
     
     def explain_action(self, query: str, available_actions: List[str]) -> Dict[str, Any]:
         """
-        Explain what action would be taken without executing
-        Returns Q-values and predicted action for EXPLAIN command
+        Explain what action would be taken without executing.
+        
+        Returns Q-values and predicted action for EXPLAIN command.
+        This method provides a read-only analysis of the optimizer's decision-making
+        process without actually executing any action or updating the Q-table.
+        
+        Args:
+            query: SQL query string
+            available_actions: List of possible actions
+        
+        Returns:
+            Dict containing:
+                - state: state key string
+                - q_values: Q-values for all actions
+                - best_action: action with highest Q-value
+                - epsilon: current exploration rate
+                - would_explore: whether exploration is possible
+                - explanation: human-readable explanation of optimizer behavior
         """
         state = f"query_type_{len(query) // 10}"
         
@@ -374,13 +390,16 @@ class QueryOptimizer:
         
         best_action = max(available_actions, key=lambda a: q_values.get(a, 0.0))
         
+        # Defensive truncation for display (limit to 20 chars)
+        best_action_display = best_action[:20] if len(best_action) > 20 else best_action
+        
         return {
             'state': state,
             'q_values': q_values,
-            'best_action': best_action,
+            'best_action': best_action_display,
             'epsilon': self.epsilon,
             'would_explore': self.epsilon > 0,
-            'exploration_note': f'Random action possible (ε={self.epsilon})' if self.epsilon > 0 else 'Would use best action'
+            'explanation': f'With ε={self.epsilon:.4f}, agent would explore {self.epsilon*100:.1f}% of the time'
         }
 
 
@@ -477,7 +496,15 @@ def explain_query_plan(query: str, cache: Optional[SemanticCache] = None,
 
 
 def format_explain_output(explain_result: Dict[str, Any]) -> str:
-    """Format EXPLAIN result as a readable table"""
+    """Format EXPLAIN result as a readable table with defensive field width limits"""
+    
+    def truncate(value: Any, max_len: int) -> str:
+        """Truncate value to max length for box alignment"""
+        s = str(value)
+        if len(s) > max_len:
+            return s[:max_len - 3] + "..."
+        return s
+    
     lines = []
     lines.append("=" * 70)
     lines.append("QUERY EXECUTION PLAN")
@@ -485,10 +512,7 @@ def format_explain_output(explain_result: Dict[str, Any]) -> str:
     
     # Smart query truncation
     query = explain_result['query']
-    if len(query) > 60:
-        display_query = query[:60] + "..."
-    else:
-        display_query = query
+    display_query = truncate(query, 60)
     
     lines.append(f"Query: {display_query}")
     lines.append("")
@@ -496,7 +520,8 @@ def format_explain_output(explain_result: Dict[str, Any]) -> str:
     # Parsing section
     lines.append("┌─ PARSING ─────────────────────────────────────────────────────────┐")
     p = explain_result['parsing']
-    lines.append(f"│ Type: {p['query_type']:<15} Complexity: {p['complexity_estimate']}/10              │")
+    query_type = truncate(p['query_type'], 15)
+    lines.append(f"│ Type: {query_type:<15} Complexity: {p['complexity_estimate']}/10              │")
     lines.append(f"│ WHERE: {str(p['has_where_clause']):<8} JOIN: {str(p['has_join']):<8} AGG: {str(p['has_aggregation']):<8}     │")
     lines.append("└───────────────────────────────────────────────────────────────────┘")
     lines.append("")
@@ -504,17 +529,17 @@ def format_explain_output(explain_result: Dict[str, Any]) -> str:
     # Cache section
     lines.append("┌─ CACHE LOOKUP ────────────────────────────────────────────────────┐")
     c = explain_result['cache_analysis']
-    lines.append(f"│ Entries checked: {c['cache_entries_checked']:<5} Threshold: {c['similarity_threshold']:<6}            │")
+    # Defensive limits: cache_entries_checked capped at 99999 for display
+    entries_checked = min(c['cache_entries_checked'], 99999)
+    lines.append(f"│ Entries checked: {entries_checked:<5} Threshold: {c['similarity_threshold']:<6}            │")
     lines.append(f"│ Best similarity: {c['best_similarity']:<6} Would hit: {str(c['would_hit_cache']):<6}              │")
     if c['top_matches']:
         lines.append("│ Top matches:                                                      │")
         for match in c['top_matches'][:3]:
             sim = match['similarity']
             hit = "✓" if match['would_hit'] else "✗"
-            # Smart truncation for cached queries
-            cached_query = match['cached_query']
-            if not cached_query.endswith('...') and len(cached_query) > 45:
-                cached_query = cached_query[:42] + "..."
+            # Smart truncation for cached queries (limit to 45 chars)
+            cached_query = truncate(match['cached_query'], 45)
             lines.append(f"│   {hit} {sim:.4f} - {cached_query:<45} │")
     lines.append("└───────────────────────────────────────────────────────────────────┘")
     lines.append("")
@@ -522,20 +547,28 @@ def format_explain_output(explain_result: Dict[str, Any]) -> str:
     # RL Agent section
     lines.append("┌─ RL AGENT ────────────────────────────────────────────────────────┐")
     r = explain_result['rl_agent']
-    lines.append(f"│ State: {r['state']:<30} Epsilon: {r.get('epsilon', r.get('exploration_probability', 0)):<6}        │")
-    lines.append(f"│ Best action: {r['best_action']:<20}                          │")
+    # Defensive truncation for state (30 chars) and best_action (20 chars)
+    state_display = truncate(r['state'], 30)
+    best_action_display = truncate(r['best_action'], 20)
+    lines.append(f"│ State: {state_display:<30} Epsilon: {r.get('epsilon', 0):<6}        │")
+    lines.append(f"│ Best action: {best_action_display:<20}                          │")
     lines.append("│ Q-values:                                                         │")
     for action, qval in r['q_values'].items():
-        lines.append(f"│   {action:<15}: {qval:>8.4f}                                    │")
+        # Truncate action names to 15 chars for alignment
+        action_display = truncate(action, 15)
+        lines.append(f"│   {action_display:<15}: {qval:>8.4f}                                    │")
     lines.append("└───────────────────────────────────────────────────────────────────┘")
     lines.append("")
     
     # Execution strategy
     lines.append("┌─ EXECUTION STRATEGY ──────────────────────────────────────────────┐")
     e = explain_result['execution_strategy']
-    lines.append(f"│ Strategy: {e['strategy']:<20} Est. latency: {e['estimated_latency']:<10}   │")
+    # Defensive truncation for strategy (20 chars)
+    strategy_display = truncate(e['strategy'], 20)
+    recommendation_display = truncate(e['recommendation'], 40)
+    lines.append(f"│ Strategy: {strategy_display:<20} Est. latency: {e['estimated_latency']:<10}   │")
     lines.append(f"│ Will cache: {str(e['will_cache_result']):<8}                                          │")
-    lines.append(f"│ Recommendation: {e['recommendation']:<40}       │")
+    lines.append(f"│ Recommendation: {recommendation_display:<40}       │")
     lines.append("└───────────────────────────────────────────────────────────────────┘")
     
     return "\n".join(lines)
