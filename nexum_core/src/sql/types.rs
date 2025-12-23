@@ -67,4 +67,8 @@ pub enum Statement {
         order_by: Option<Vec<OrderByClause>>,
         limit: Option<usize>,
     },
+    Delete {
+        table: String,
+        where_clause: Option<Box<Expr>>,
+    },
 }

@@ -162,6 +162,46 @@ impl Executor {
 
                     Ok(ExecutionResult::Selected { columns, rows })
                 }
+                Statement::Delete {
+                    table,
+                    where_clause,
+                } => {
+                    let schema = self.catalog.get_table(&table)?.ok_or_else(|| {
+                        StorageError::ReadError(format!("Table {} not found", table))
+                    })?;
+
+                    let prefix = Self::table_data_prefix(&table);
+                    let all_rows = self.storage.scan_prefix(&prefix)?;
+
+                    let mut deleted_count = 0;
+
+                    if let Some(where_expr) = where_clause {
+                        let column_names: Vec<String> =
+                            schema.columns.iter().map(|c| c.name.clone()).collect();
+                        let evaluator = ExpressionEvaluator::new(column_names);
+
+                        for (key, value) in &all_rows {
+                            if let Ok(row) = serde_json::from_slice::<Row>(value) {
+                                if evaluator.evaluate(&where_expr, &row.values).unwrap_or(false) {
+                                    self.storage.delete(key)?;
+                                    deleted_count += 1;
+                                }
+                            }
+                        }
+                    } else {
+                        // No WHERE clause - delete all rows
+                        println!("Warning: DELETE without WHERE clause will remove all rows from table '{}'", table);
+                        for (key, _) in &all_rows {
+                            self.storage.delete(key)?;
+                            deleted_count += 1;
+                        }
+                    }
+
+                    Ok(ExecutionResult::Deleted {
+                        table,
+                        rows: deleted_count,
+                    })
+                }
             };
 
         let duration = start.elapsed();
@@ -205,6 +245,10 @@ pub enum ExecutionResult {
     Selected {
         columns: Vec<String>,
         rows: Vec<Row>,
+    },
+    Deleted {
+        table: String,
+        rows: usize,
     },
 }
 
@@ -267,6 +311,144 @@ mod tests {
                 assert_eq!(rows.len(), 2);
             }
             _ => panic!("Expected selected"),
+        }
+    }
+
+    #[test]
+    fn test_delete_with_where_clause() {
+        let storage = StorageEngine::memory().unwrap();
+        let executor = Executor::new(storage);
+
+        // Create table
+        let create = Statement::CreateTable {
+            name: "test_delete".to_string(),
+            columns: vec![
+                Column {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                },
+                Column {
+                    name: "name".to_string(),
+                    data_type: DataType::Text,
+                },
+            ],
+        };
+        executor.execute(create).unwrap();
+
+        // Insert rows
+        let insert = Statement::Insert {
+            table: "test_delete".to_string(),
+            columns: vec!["id".to_string(), "name".to_string()],
+            values: vec![
+                vec![Value::Integer(1), Value::Text("Alice".to_string())],
+                vec![Value::Integer(2), Value::Text("Bob".to_string())],
+                vec![Value::Integer(3), Value::Text("Charlie".to_string())],
+            ],
+        };
+        executor.execute(insert).unwrap();
+
+        // Delete with WHERE clause
+        use sqlparser::dialect::GenericDialect;
+        use sqlparser::parser::Parser as SqlParser;
+        let dialect = GenericDialect {};
+        let ast = SqlParser::parse_sql(&dialect, "SELECT * FROM t WHERE id = 2").unwrap();
+        let where_expr = if let sqlparser::ast::Statement::Query(query) = &ast[0] {
+            if let sqlparser::ast::SetExpr::Select(select) = &*query.body {
+                select.selection.clone().map(Box::new)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let delete = Statement::Delete {
+            table: "test_delete".to_string(),
+            where_clause: where_expr,
+        };
+
+        let result = executor.execute(delete).unwrap();
+        match result {
+            ExecutionResult::Deleted { table, rows } => {
+                assert_eq!(table, "test_delete");
+                assert_eq!(rows, 1);
+            }
+            _ => panic!("Expected Deleted result"),
+        }
+
+        // Verify only 2 rows remain
+        let select = Statement::Select {
+            table: "test_delete".to_string(),
+            columns: vec!["*".to_string()],
+            where_clause: None,
+            order_by: None,
+            limit: None,
+        };
+        let result = executor.execute(select).unwrap();
+        match result {
+            ExecutionResult::Selected { rows, .. } => {
+                assert_eq!(rows.len(), 2);
+            }
+            _ => panic!("Expected Selected result"),
+        }
+    }
+
+    #[test]
+    fn test_delete_all_rows() {
+        let storage = StorageEngine::memory().unwrap();
+        let executor = Executor::new(storage);
+
+        // Create table
+        let create = Statement::CreateTable {
+            name: "test_delete_all".to_string(),
+            columns: vec![
+                Column {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                },
+            ],
+        };
+        executor.execute(create).unwrap();
+
+        // Insert rows
+        let insert = Statement::Insert {
+            table: "test_delete_all".to_string(),
+            columns: vec!["id".to_string()],
+            values: vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+            ],
+        };
+        executor.execute(insert).unwrap();
+
+        // Delete all (no WHERE clause)
+        let delete = Statement::Delete {
+            table: "test_delete_all".to_string(),
+            where_clause: None,
+        };
+
+        let result = executor.execute(delete).unwrap();
+        match result {
+            ExecutionResult::Deleted { rows, .. } => {
+                assert_eq!(rows, 2);
+            }
+            _ => panic!("Expected Deleted result"),
+        }
+
+        // Verify no rows remain
+        let select = Statement::Select {
+            table: "test_delete_all".to_string(),
+            columns: vec!["*".to_string()],
+            where_clause: None,
+            order_by: None,
+            limit: None,
+        };
+        let result = executor.execute(select).unwrap();
+        match result {
+            ExecutionResult::Selected { rows, .. } => {
+                assert_eq!(rows.len(), 0);
+            }
+            _ => panic!("Expected Selected result"),
         }
     }
 }

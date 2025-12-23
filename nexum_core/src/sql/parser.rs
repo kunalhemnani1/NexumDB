@@ -61,6 +61,24 @@ impl Parser {
                     values,
                 })
             }
+            SqlStatement::Delete {
+                from,
+                selection,
+                ..
+            } => {
+                let table = if let Some(from_clause) = from.first() {
+                    from_clause.relation.to_string()
+                } else {
+                    return Err(anyhow!("DELETE requires a table name"));
+                };
+
+                let where_clause = selection.as_ref().map(|expr| Box::new(expr.clone()));
+
+                Ok(Statement::Delete {
+                    table,
+                    where_clause,
+                })
+            }
             SqlStatement::Query(query) => {
                 if let ast::SetExpr::Select(select) = &*query.body {
                     let table =
@@ -215,6 +233,34 @@ mod tests {
                 assert_eq!(columns.len(), 2);
             }
             _ => panic!("Expected Select statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_delete_with_where() {
+        let sql = "DELETE FROM users WHERE id = 1";
+        let stmt = Parser::parse(sql).unwrap();
+
+        match stmt {
+            Statement::Delete { table, where_clause } => {
+                assert_eq!(table, "users");
+                assert!(where_clause.is_some());
+            }
+            _ => panic!("Expected Delete statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_delete_without_where() {
+        let sql = "DELETE FROM users";
+        let stmt = Parser::parse(sql).unwrap();
+
+        match stmt {
+            Statement::Delete { table, where_clause } => {
+                assert_eq!(table, "users");
+                assert!(where_clause.is_none());
+            }
+            _ => panic!("Expected Delete statement"),
         }
     }
 }
