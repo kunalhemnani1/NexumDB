@@ -72,7 +72,12 @@ impl Parser {
                 let assignment_pairs = assignments
                     .iter()
                     .map(|assign| {
-                        let col_name = assign.id.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".");
+                        let col_name = assign
+                            .id
+                            .iter()
+                            .map(|i| i.value.clone())
+                            .collect::<Vec<_>>()
+                            .join(".");
                         let value = Self::convert_expr(&assign.value)?;
                         Ok((col_name, value))
                     })

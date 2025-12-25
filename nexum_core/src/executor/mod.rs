@@ -177,17 +177,23 @@ impl Executor {
                     // Build column index map for assignments
                     let mut assignment_indices: Vec<(usize, Value)> = Vec::new();
                     for (col_name, new_value) in &assignments {
-                        let col_idx = column_names
-                            .iter()
-                            .position(|c| c == col_name)
-                            .ok_or_else(|| {
-                                StorageError::ReadError(format!("Column {} not found in table {}", col_name, table))
-                            })?;
+                        let col_idx =
+                            column_names
+                                .iter()
+                                .position(|c| c == col_name)
+                                .ok_or_else(|| {
+                                    StorageError::ReadError(format!(
+                                        "Column {} not found in table {}",
+                                        col_name, table
+                                    ))
+                                })?;
 
                         // Type checking: verify the new value matches the column type
                         let expected_type = &schema.columns[col_idx].data_type;
                         let actual_type = new_value.data_type();
-                        if actual_type != crate::sql::types::DataType::Null && *expected_type != actual_type {
+                        if actual_type != crate::sql::types::DataType::Null
+                            && *expected_type != actual_type
+                        {
                             return Err(StorageError::ReadError(format!(
                                 "Type mismatch for column '{}': expected {:?}, got {:?}",
                                 col_name, expected_type, actual_type
@@ -212,9 +218,9 @@ impl Executor {
                                     Ok(result) => result,
                                     Err(e) => {
                                         return Err(StorageError::ReadError(format!(
-                                            "WHERE clause evaluation failed: {}. No rows were updated.",
-                                            e
-                                        )));
+                                        "WHERE clause evaluation failed: {}. No rows were updated.",
+                                        e
+                                    )));
                                     }
                                 }
                             } else {
@@ -231,18 +237,23 @@ impl Executor {
                         }
                     }
 
-                    // Phase 2: Apply all updates atomically
+                    // Phase 2: Apply all updates atomically using batch operation
                     let updated_count = updates.len();
-                    for (key, row) in updates {
-                        let value = serde_json::to_vec(&row)?;
-                        self.storage.set(&key, &value)?;
+                    if !updates.is_empty() {
+                        let batch_operations: Vec<(Vec<u8>, Vec<u8>)> = updates
+                            .into_iter()
+                            .map(|(key, row)| {
+                                let value = serde_json::to_vec(&row).unwrap();
+                                (key, value)
+                            })
+                            .collect();
+                        self.storage.batch_set(batch_operations)?;
                     }
 
                     if where_clause.is_none() && updated_count > 0 {
                         println!(
                             "UPDATE without WHERE clause modified all {} rows in table '{}'",
-                            updated_count,
-                            table
+                            updated_count, table
                         );
                     }
 
