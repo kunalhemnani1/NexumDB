@@ -14,6 +14,11 @@ pub enum Plan {
         table: String,
         columns: Vec<String>,
     },
+    Update {
+        table: String,
+        columns: Vec<String>,
+        has_where: bool,
+    },
 }
 
 pub struct Planner;
@@ -36,6 +41,15 @@ impl Planner {
                 rows: values.len(),
             },
             Statement::Select { table, columns, .. } => Plan::Select { table, columns },
+            Statement::Update {
+                table,
+                assignments,
+                where_clause,
+            } => Plan::Update {
+                table,
+                columns: assignments.iter().map(|(col, _)| col.clone()).collect(),
+                has_where: where_clause.is_some(),
+            },
         }
     }
 }

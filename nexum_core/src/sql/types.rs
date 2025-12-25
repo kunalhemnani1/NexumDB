@@ -67,4 +67,9 @@ pub enum Statement {
         order_by: Option<Vec<OrderByClause>>,
         limit: Option<usize>,
     },
+    Update {
+        table: String,
+        assignments: Vec<(String, Value)>,
+        where_clause: Option<Box<Expr>>,
+    },
 }
