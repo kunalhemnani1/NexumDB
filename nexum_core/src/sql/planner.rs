@@ -14,11 +14,13 @@ pub enum Plan {
         table: String,
         columns: Vec<String>,
     },
+    Delete {
+        table: String,
+        has_where: bool,
+    },
     Update {
         table: String,
         columns: Vec<String>,
-    Delete {
-        table: String,
         has_where: bool,
     },
 }
@@ -43,6 +45,13 @@ impl Planner {
                 rows: values.len(),
             },
             Statement::Select { table, columns, .. } => Plan::Select { table, columns },
+            Statement::Delete {
+                table,
+                where_clause,
+            } => Plan::Delete {
+                table,
+                has_where: where_clause.is_some(),
+            },
             Statement::Update {
                 table,
                 assignments,
@@ -50,11 +59,6 @@ impl Planner {
             } => Plan::Update {
                 table,
                 columns: assignments.iter().map(|(col, _)| col.clone()).collect(),
-            Statement::Delete {
-                table,
-                where_clause,
-            } => Plan::Delete {
-                table,
                 has_where: where_clause.is_some(),
             },
         }

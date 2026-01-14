@@ -88,6 +88,9 @@ impl Parser {
                 Ok(Statement::Update {
                     table: table_name,
                     assignments: assignment_pairs,
+                    where_clause,
+                })
+            }
             SqlStatement::Delete {
                 from, selection, ..
             } => {
@@ -278,6 +281,10 @@ mod tests {
                 assert!(where_clause.is_some());
             }
             _ => panic!("Expected Update statement"),
+        }
+    }
+
+    #[test]
     fn test_parse_delete_with_where() {
         let sql = "DELETE FROM users WHERE id = 1";
         let stmt = Parser::parse(sql).unwrap();
@@ -331,6 +338,10 @@ mod tests {
                 assert!(where_clause.is_none());
             }
             _ => panic!("Expected Update statement"),
+        }
+    }
+
+    #[test]
     fn test_parse_delete_without_where() {
         let sql = "DELETE FROM users";
         let stmt = Parser::parse(sql).unwrap();
