@@ -249,6 +249,18 @@ impl Executor {
                 let column_names: Vec<String> =
                     schema.columns.iter().map(|c| c.name.clone()).collect();
 
+                // Check for duplicate column assignments
+                let mut seen_columns: std::collections::HashSet<&str> =
+                    std::collections::HashSet::new();
+                for (col_name, _) in &assignments {
+                    if !seen_columns.insert(col_name.as_str()) {
+                        return Err(StorageError::ReadError(format!(
+                            "Duplicate column assignment for '{}'",
+                            col_name
+                        )));
+                    }
+                }
+
                 // Build column index map for assignments
                 let mut assignment_indices: Vec<(usize, Value)> = Vec::new();
                 for (col_name, new_value) in &assignments {
