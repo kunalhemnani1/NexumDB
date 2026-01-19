@@ -7,7 +7,7 @@ Tests the complete cache lifecycle without requiring Rust compilation
 import sys
 import os
 import tempfile
-import shutil
+
 from pathlib import Path
 
 # Add project root to path
@@ -81,7 +81,7 @@ def test_cache_persistence_lifecycle():
         cache2.save_cache_json(json_file)
         
         assert os.path.exists(json_file), "JSON file should exist"
-        print(f"   JSON export successful")
+        print("   JSON export successful")
         
         # Test 6: Test cache optimization
         print("\n6. Testing cache optimization...")
