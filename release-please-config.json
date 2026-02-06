@@ -1,15 +1,14 @@
 {
     "packages": {
-        ".": {
+        "nexum_core": {
             "release-type": "simple",
-            "bump-minor-pre-major": true,
-            "bump-patch-for-minor-pre-major": true,
             "changelog-path": "CHANGELOG.md",
             "include-component-in-tag": false,
             "include-v-in-tag": true,
             "extra-files": [
                 "nexum_core/Cargo.toml",
-                "nexum_cli/Cargo.toml"
+                "nexum_cli/Cargo.toml",
+                "Cargo.toml"
             ]
         }
     },
