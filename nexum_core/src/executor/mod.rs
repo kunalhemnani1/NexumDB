@@ -1,6 +1,6 @@
 use crate::bridge::SemanticCache;
 use crate::catalog::Catalog;
-use crate::sql::types::{Statement, Value};
+use crate::sql::types::{Column, DataType, SelectItem, Statement, Value};
 use crate::storage::{Result, StorageEngine, StorageError};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -53,26 +53,28 @@ impl Executor {
         let result = match statement {
             Statement::CreateTable { name, columns } => {
                 self.catalog.create_table(&name, columns)?;
+                self.invalidate_cache()?;
                 Ok(ExecutionResult::Created { table: name })
             }
             Statement::Insert {
                 table,
-                columns: _,
+                columns,
                 values,
             } => {
-                let _schema = self
+                let schema = self
                     .catalog
                     .get_table(&table)?
                     .ok_or_else(|| StorageError::ReadError(format!("Table {} not found", table)))?;
 
-                for row_values in &values {
-                    let row = Row {
-                        values: row_values.clone(),
-                    };
+                let prepared_rows = Self::prepare_insert_rows(&schema, &table, &columns, &values)?;
+
+                for row in prepared_rows {
                     let key = self.generate_row_key(&table);
                     let value = serde_json::to_vec(&row)?;
                     self.storage.set(&key, &value)?;
                 }
+
+                self.invalidate_cache()?;
 
                 Ok(ExecutionResult::Inserted {
                     table,
@@ -81,26 +83,38 @@ impl Executor {
             }
             Statement::Select {
                 table,
-                columns,
+                projection,
                 where_clause,
                 order_by,
                 limit,
             } => {
-                if let Some(cache) = &self.cache {
-                    let query_str = format!("SELECT {:?} FROM {}", columns, table);
-
-                    if let Ok(Some(cached_result)) = cache.get(&query_str) {
-                        log::debug!("Cache hit for query: {}", query_str);
-                        let rows: Vec<Row> =
-                            serde_json::from_str(&cached_result).unwrap_or_else(|_| Vec::new());
-                        return Ok(ExecutionResult::Selected { columns, rows });
-                    }
-                }
-
                 let schema = self
                     .catalog
                     .get_table(&table)?
                     .ok_or_else(|| StorageError::ReadError(format!("Table {} not found", table)))?;
+
+                let (projection_indices, output_columns) =
+                    Self::build_projection(&schema, &projection)?;
+
+                let cache_key = Self::build_cache_key(
+                    &table,
+                    &projection,
+                    where_clause.as_deref(),
+                    &order_by,
+                    limit,
+                );
+
+                if let Some(cache) = &self.cache {
+                    if let Ok(Some(cached_result)) = cache.get(&cache_key) {
+                        log::debug!("Cache hit for query: {}", cache_key);
+                        let rows: Vec<Row> =
+                            serde_json::from_str(&cached_result).unwrap_or_else(|_| Vec::new());
+                        return Ok(ExecutionResult::Selected {
+                            columns: output_columns,
+                            rows,
+                        });
+                    }
+                }
 
                 let prefix = Self::table_data_prefix(&table);
                 let all_rows = self.storage.scan_prefix(&prefix)?;
@@ -124,32 +138,38 @@ impl Executor {
                     log::debug!("Filtered {} rows using WHERE clause", rows.len());
                 }
 
-                if let Some(order_clauses) = order_by {
+                if let Some(order_clauses) = &order_by {
                     let column_names: Vec<String> =
                         schema.columns.iter().map(|c| c.name.clone()).collect();
 
                     for order_clause in order_clauses.iter().rev() {
-                        if let Some(col_idx) =
-                            column_names.iter().position(|c| c == &order_clause.column)
-                        {
-                            rows.sort_by(|a, b| {
-                                let ordering = match (&a.values[col_idx], &b.values[col_idx]) {
-                                    (Value::Integer(av), Value::Integer(bv)) => av.cmp(bv),
-                                    (Value::Float(av), Value::Float(bv)) => {
-                                        av.partial_cmp(bv).unwrap_or(std::cmp::Ordering::Equal)
-                                    }
-                                    (Value::Text(av), Value::Text(bv)) => av.cmp(bv),
-                                    (Value::Boolean(av), Value::Boolean(bv)) => av.cmp(bv),
-                                    _ => std::cmp::Ordering::Equal,
-                                };
+                        let col_idx = column_names
+                            .iter()
+                            .position(|c| c == &order_clause.column)
+                            .ok_or_else(|| {
+                                StorageError::ReadError(format!(
+                                    "Column {} not found in table {}",
+                                    order_clause.column, table
+                                ))
+                            })?;
 
-                                if order_clause.ascending {
-                                    ordering
-                                } else {
-                                    ordering.reverse()
+                        rows.sort_by(|a, b| {
+                            let ordering = match (&a.values[col_idx], &b.values[col_idx]) {
+                                (Value::Integer(av), Value::Integer(bv)) => av.cmp(bv),
+                                (Value::Float(av), Value::Float(bv)) => {
+                                    av.partial_cmp(bv).unwrap_or(std::cmp::Ordering::Equal)
                                 }
-                            });
-                        }
+                                (Value::Text(av), Value::Text(bv)) => av.cmp(bv),
+                                (Value::Boolean(av), Value::Boolean(bv)) => av.cmp(bv),
+                                _ => std::cmp::Ordering::Equal,
+                            };
+
+                            if order_clause.ascending {
+                                ordering
+                            } else {
+                                ordering.reverse()
+                            }
+                        });
                     }
 
                     log::debug!("Sorted {} rows using ORDER BY", rows.len());
@@ -160,13 +180,66 @@ impl Executor {
                     log::debug!("Limited to {} rows using LIMIT", limit_count);
                 }
 
+                let projected_rows: Vec<Row> = rows
+                    .into_iter()
+                    .map(|row| Row {
+                        values: projection_indices
+                            .iter()
+                            .map(|idx| row.values[*idx].clone())
+                            .collect(),
+                    })
+                    .collect();
+
                 if let Some(cache) = &self.cache {
-                    let query_str = format!("SELECT {:?} FROM {}", columns, table);
-                    let cached_data = serde_json::to_string(&rows).unwrap_or_default();
-                    let _ = cache.put(&query_str, &cached_data);
+                    let cached_data = serde_json::to_string(&projected_rows).unwrap_or_default();
+                    let _ = cache.put(&cache_key, &cached_data);
                 }
 
-                Ok(ExecutionResult::Selected { columns, rows })
+                Ok(ExecutionResult::Selected {
+                    columns: output_columns,
+                    rows: projected_rows,
+                })
+            }
+            Statement::ShowTables => {
+                let tables = self.catalog.list_tables()?;
+                Ok(ExecutionResult::TableList { tables })
+            }
+            Statement::DescribeTable { name } => {
+                let schema = self
+                    .catalog
+                    .get_table(&name)?
+                    .ok_or_else(|| StorageError::ReadError(format!("Table {} not found", name)))?;
+                Ok(ExecutionResult::TableDescription {
+                    table: name,
+                    columns: schema.columns,
+                })
+            }
+            Statement::DropTable { name, if_exists } => {
+                let schema = self.catalog.get_table(&name)?;
+                if schema.is_none() {
+                    if if_exists {
+                        return Ok(ExecutionResult::Deleted {
+                            table: name,
+                            rows: 0,
+                        });
+                    }
+                    return Err(StorageError::ReadError(format!("Table {} not found", name)));
+                }
+
+                let prefix = Self::table_data_prefix(&name);
+                let all_rows = self.storage.scan_prefix(&prefix)?;
+                let deleted_count = all_rows.len();
+                for (key, _) in &all_rows {
+                    self.storage.delete(key)?;
+                }
+
+                self.catalog.drop_table(&name)?;
+                self.invalidate_cache()?;
+
+                Ok(ExecutionResult::Deleted {
+                    table: name,
+                    rows: deleted_count,
+                })
             }
             Statement::Delete {
                 table,
@@ -214,6 +287,7 @@ impl Executor {
                         self.storage.delete(&key)?;
                     }
 
+                    self.invalidate_cache()?;
                     Ok(ExecutionResult::Deleted {
                         table,
                         rows: deleted_count,
@@ -230,6 +304,7 @@ impl Executor {
                         self.storage.delete(key)?;
                     }
 
+                    self.invalidate_cache()?;
                     Ok(ExecutionResult::Deleted {
                         table,
                         rows: deleted_count,
@@ -275,19 +350,10 @@ impl Executor {
                                 ))
                             })?;
 
-                    // Type checking: verify the new value matches the column type
                     let expected_type = &schema.columns[col_idx].data_type;
-                    let actual_type = new_value.data_type();
-                    if actual_type != crate::sql::types::DataType::Null
-                        && *expected_type != actual_type
-                    {
-                        return Err(StorageError::ReadError(format!(
-                            "Type mismatch for column '{}': expected {:?}, got {:?}",
-                            col_name, expected_type, actual_type
-                        )));
-                    }
+                    let coerced_value = Self::coerce_value(col_name, expected_type, new_value)?;
 
-                    assignment_indices.push((col_idx, new_value.clone()));
+                    assignment_indices.push((col_idx, coerced_value));
                 }
 
                 let prefix = Self::table_data_prefix(&table);
@@ -357,6 +423,7 @@ impl Executor {
                     );
                 }
 
+                self.invalidate_cache()?;
                 Ok(ExecutionResult::Updated {
                     table,
                     rows: updated_count,
@@ -368,6 +435,277 @@ impl Executor {
         log::debug!("Query executed in {:?}", duration);
 
         result
+    }
+
+    fn invalidate_cache(&self) -> Result<()> {
+        if let Some(cache) = &self.cache {
+            cache
+                .clear_cache()
+                .map_err(|e| StorageError::WriteError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn build_projection(
+        schema: &crate::sql::types::TableSchema,
+        projection: &[SelectItem],
+    ) -> Result<(Vec<usize>, Vec<String>)> {
+        if projection.is_empty() {
+            return Err(StorageError::ReadError(
+                "SELECT projection cannot be empty".to_string(),
+            ));
+        }
+
+        let mut indices = Vec::new();
+        let mut column_names = Vec::new();
+
+        for item in projection {
+            match item {
+                SelectItem::Wildcard => {
+                    for (idx, column) in schema.columns.iter().enumerate() {
+                        indices.push(idx);
+                        column_names.push(column.name.clone());
+                    }
+                }
+                SelectItem::Column { name, alias } => {
+                    let col_idx = schema
+                        .columns
+                        .iter()
+                        .position(|c| c.name == *name)
+                        .ok_or_else(|| {
+                            StorageError::ReadError(format!(
+                                "Column {} not found in table {}",
+                                name, schema.name
+                            ))
+                        })?;
+
+                    indices.push(col_idx);
+                    column_names.push(alias.clone().unwrap_or_else(|| name.clone()));
+                }
+            }
+        }
+
+        Ok((indices, column_names))
+    }
+
+    fn prepare_insert_rows(
+        schema: &crate::sql::types::TableSchema,
+        table: &str,
+        columns: &[String],
+        values: &[Vec<Value>],
+    ) -> Result<Vec<Row>> {
+        let schema_len = schema.columns.len();
+
+        if columns.is_empty() {
+            let mut rows = Vec::with_capacity(values.len());
+            for (row_idx, row_values) in values.iter().enumerate() {
+                if row_values.len() != schema_len {
+                    return Err(StorageError::WriteError(format!(
+                        "INSERT row {} has {} values but table {} expects {} columns",
+                        row_idx + 1,
+                        row_values.len(),
+                        table,
+                        schema_len
+                    )));
+                }
+
+                let mut coerced = Vec::with_capacity(schema_len);
+                for (idx, value) in row_values.iter().enumerate() {
+                    let column = &schema.columns[idx];
+                    let coerced_value = Self::coerce_value(&column.name, &column.data_type, value)?;
+                    coerced.push(coerced_value);
+                }
+                rows.push(Row { values: coerced });
+            }
+            return Ok(rows);
+        }
+
+        let mut seen_columns = std::collections::HashSet::new();
+        for column in columns {
+            if !seen_columns.insert(column.as_str()) {
+                return Err(StorageError::WriteError(format!(
+                    "Duplicate column '{}' in INSERT statement",
+                    column
+                )));
+            }
+        }
+
+        let mut column_indices = Vec::with_capacity(columns.len());
+        for column in columns {
+            let col_idx = schema
+                .columns
+                .iter()
+                .position(|c| c.name == *column)
+                .ok_or_else(|| {
+                    StorageError::WriteError(format!(
+                        "Column {} not found in table {}",
+                        column, table
+                    ))
+                })?;
+            column_indices.push(col_idx);
+        }
+
+        let mut rows = Vec::with_capacity(values.len());
+        for (row_idx, row_values) in values.iter().enumerate() {
+            if row_values.len() != columns.len() {
+                return Err(StorageError::WriteError(format!(
+                    "INSERT row {} has {} values but {} columns were specified",
+                    row_idx + 1,
+                    row_values.len(),
+                    columns.len()
+                )));
+            }
+
+            let mut row = vec![Value::Null; schema_len];
+            for (value_idx, value) in row_values.iter().enumerate() {
+                let col_idx = column_indices[value_idx];
+                let column = &schema.columns[col_idx];
+                let coerced_value = Self::coerce_value(&column.name, &column.data_type, value)?;
+                row[col_idx] = coerced_value;
+            }
+            rows.push(Row { values: row });
+        }
+
+        Ok(rows)
+    }
+
+    fn coerce_value(column_name: &str, expected: &DataType, value: &Value) -> Result<Value> {
+        if matches!(value, Value::Null) {
+            return Ok(Value::Null);
+        }
+
+        match expected {
+            DataType::Integer => match value {
+                Value::Integer(_) => Ok(value.clone()),
+                Value::Float(f) => {
+                    if f.fract() == 0.0 {
+                        Ok(Value::Integer(*f as i64))
+                    } else {
+                        Err(StorageError::WriteError(format!(
+                            "Type mismatch for column '{}': expected Integer, got Float",
+                            column_name
+                        )))
+                    }
+                }
+                Value::Text(t) => t.parse::<i64>().map(Value::Integer).map_err(|_| {
+                    StorageError::WriteError(format!(
+                        "Type mismatch for column '{}': expected Integer, got Text",
+                        column_name
+                    ))
+                }),
+                Value::Boolean(b) => Ok(Value::Integer(if *b { 1 } else { 0 })),
+                Value::Null => Ok(Value::Null),
+            },
+            DataType::Float => match value {
+                Value::Float(_) => Ok(value.clone()),
+                Value::Integer(i) => Ok(Value::Float(*i as f64)),
+                Value::Text(t) => t.parse::<f64>().map(Value::Float).map_err(|_| {
+                    StorageError::WriteError(format!(
+                        "Type mismatch for column '{}': expected Float, got Text",
+                        column_name
+                    ))
+                }),
+                Value::Boolean(b) => Ok(Value::Float(if *b { 1.0 } else { 0.0 })),
+                Value::Null => Ok(Value::Null),
+            },
+            DataType::Text => Ok(Value::Text(Self::format_value(value))),
+            DataType::Boolean => match value {
+                Value::Boolean(_) => Ok(value.clone()),
+                Value::Integer(i) => match *i {
+                    0 => Ok(Value::Boolean(false)),
+                    1 => Ok(Value::Boolean(true)),
+                    _ => Err(StorageError::WriteError(format!(
+                        "Type mismatch for column '{}': expected Boolean, got Integer",
+                        column_name
+                    ))),
+                },
+                Value::Float(f) => {
+                    if *f == 0.0 {
+                        Ok(Value::Boolean(false))
+                    } else if *f == 1.0 {
+                        Ok(Value::Boolean(true))
+                    } else {
+                        Err(StorageError::WriteError(format!(
+                            "Type mismatch for column '{}': expected Boolean, got Float",
+                            column_name
+                        )))
+                    }
+                }
+                Value::Text(t) => {
+                    let normalized = t.trim().to_lowercase();
+                    match normalized.as_str() {
+                        "true" | "1" => Ok(Value::Boolean(true)),
+                        "false" | "0" => Ok(Value::Boolean(false)),
+                        _ => Err(StorageError::WriteError(format!(
+                            "Type mismatch for column '{}': expected Boolean, got Text",
+                            column_name
+                        ))),
+                    }
+                }
+                Value::Null => Ok(Value::Null),
+            },
+            DataType::Null => Err(StorageError::WriteError(format!(
+                "Column '{}' does not accept non-null values",
+                column_name
+            ))),
+        }
+    }
+
+    fn format_value(value: &Value) -> String {
+        match value {
+            Value::Integer(i) => i.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Text(t) => t.clone(),
+            Value::Boolean(b) => b.to_string(),
+            Value::Null => "NULL".to_string(),
+        }
+    }
+
+    fn build_cache_key(
+        table: &str,
+        projection: &[SelectItem],
+        where_clause: Option<&sqlparser::ast::Expr>,
+        order_by: &Option<Vec<crate::sql::types::OrderByClause>>,
+        limit: Option<usize>,
+    ) -> String {
+        let projection_str = projection
+            .iter()
+            .map(|item| match item {
+                SelectItem::Wildcard => "*".to_string(),
+                SelectItem::Column { name, alias } => alias
+                    .as_ref()
+                    .map(|a| format!("{} AS {}", name, a))
+                    .unwrap_or_else(|| name.clone()),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let mut key = format!("SELECT {} FROM {}", projection_str, table);
+
+        if let Some(expr) = where_clause {
+            key.push_str(&format!(" WHERE {}", expr));
+        }
+
+        if let Some(order_clauses) = order_by {
+            let order_str = order_clauses
+                .iter()
+                .map(|clause| {
+                    if clause.ascending {
+                        format!("{} ASC", clause.column)
+                    } else {
+                        format!("{} DESC", clause.column)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            key.push_str(&format!(" ORDER BY {}", order_str));
+        }
+
+        if let Some(limit_count) = limit {
+            key.push_str(&format!(" LIMIT {}", limit_count));
+        }
+
+        key
     }
 
     fn generate_row_key(&self, table: &str) -> Vec<u8> {
@@ -421,16 +759,17 @@ impl Executor {
     }
 }
 
-impl Clone for StorageEngine {
-    fn clone(&self) -> Self {
-        StorageEngine::memory().unwrap()
-    }
-}
-
 #[derive(Debug)]
 pub enum ExecutionResult {
     Created {
         table: String,
+    },
+    TableList {
+        tables: Vec<String>,
+    },
+    TableDescription {
+        table: String,
+        columns: Vec<Column>,
     },
     Inserted {
         table: String,
@@ -453,7 +792,7 @@ pub enum ExecutionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::types::{Column, DataType};
+    use crate::sql::types::{Column, DataType, SelectItem};
 
     #[test]
     fn test_end_to_end_execution() {
@@ -497,7 +836,7 @@ mod tests {
 
         let select = Statement::Select {
             table: "test_table".to_string(),
-            columns: vec!["*".to_string()],
+            projection: vec![SelectItem::Wildcard],
             where_clause: None,
             order_by: None,
             limit: None,
@@ -577,7 +916,7 @@ mod tests {
         // Verify only 2 rows remain
         let select = Statement::Select {
             table: "test_delete".to_string(),
-            columns: vec!["*".to_string()],
+            projection: vec![SelectItem::Wildcard],
             where_clause: None,
             order_by: None,
             limit: None,
@@ -631,7 +970,7 @@ mod tests {
         // Verify no rows remain
         let select = Statement::Select {
             table: "test_delete_all".to_string(),
-            columns: vec!["*".to_string()],
+            projection: vec![SelectItem::Wildcard],
             where_clause: None,
             order_by: None,
             limit: None,
@@ -712,7 +1051,7 @@ mod tests {
         // Verify the update
         let select = Statement::Select {
             table: "test_update".to_string(),
-            columns: vec!["*".to_string()],
+            projection: vec![SelectItem::Wildcard],
             where_clause: None,
             order_by: None,
             limit: None,
@@ -798,7 +1137,7 @@ mod tests {
         // Verify the update
         let select = Statement::Select {
             table: "test_update_multi".to_string(),
-            columns: vec!["*".to_string()],
+            projection: vec![SelectItem::Wildcard],
             where_clause: None,
             order_by: None,
             limit: None,
@@ -869,7 +1208,7 @@ mod tests {
         // Verify all rows updated
         let select = Statement::Select {
             table: "test_update_all".to_string(),
-            columns: vec!["*".to_string()],
+            projection: vec![SelectItem::Wildcard],
             where_clause: None,
             order_by: None,
             limit: None,
@@ -1008,5 +1347,171 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("not found"));
+    }
+
+    #[test]
+    fn test_insert_column_mapping_and_nulls() {
+        let storage = StorageEngine::memory().unwrap();
+        let executor = Executor::new(storage);
+
+        let create = Statement::CreateTable {
+            name: "test_insert_map".to_string(),
+            columns: vec![
+                Column {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                },
+                Column {
+                    name: "name".to_string(),
+                    data_type: DataType::Text,
+                },
+                Column {
+                    name: "age".to_string(),
+                    data_type: DataType::Integer,
+                },
+            ],
+        };
+        executor.execute(create).unwrap();
+
+        let insert = Statement::Insert {
+            table: "test_insert_map".to_string(),
+            columns: vec!["name".to_string(), "id".to_string()],
+            values: vec![vec![Value::Text("Alice".to_string()), Value::Integer(1)]],
+        };
+        executor.execute(insert).unwrap();
+
+        let select = Statement::Select {
+            table: "test_insert_map".to_string(),
+            projection: vec![SelectItem::Wildcard],
+            where_clause: None,
+            order_by: None,
+            limit: None,
+        };
+        let result = executor.execute(select).unwrap();
+
+        match result {
+            ExecutionResult::Selected { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].values.len(), 3);
+                assert_eq!(rows[0].values[0], Value::Integer(1));
+                assert_eq!(rows[0].values[1], Value::Text("Alice".to_string()));
+                assert_eq!(rows[0].values[2], Value::Null);
+            }
+            _ => panic!("Expected Selected result"),
+        }
+    }
+
+    #[test]
+    fn test_insert_and_update_coercion() {
+        let storage = StorageEngine::memory().unwrap();
+        let executor = Executor::new(storage);
+
+        let create = Statement::CreateTable {
+            name: "test_coercion".to_string(),
+            columns: vec![
+                Column {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                },
+                Column {
+                    name: "score".to_string(),
+                    data_type: DataType::Float,
+                },
+                Column {
+                    name: "active".to_string(),
+                    data_type: DataType::Boolean,
+                },
+                Column {
+                    name: "note".to_string(),
+                    data_type: DataType::Text,
+                },
+            ],
+        };
+        executor.execute(create).unwrap();
+
+        let insert = Statement::Insert {
+            table: "test_coercion".to_string(),
+            columns: vec![],
+            values: vec![vec![
+                Value::Text("42".to_string()),
+                Value::Integer(7),
+                Value::Text("true".to_string()),
+                Value::Integer(9),
+            ]],
+        };
+        executor.execute(insert).unwrap();
+
+        let update = Statement::Update {
+            table: "test_coercion".to_string(),
+            assignments: vec![
+                ("score".to_string(), Value::Text("3.5".to_string())),
+                ("active".to_string(), Value::Integer(0)),
+            ],
+            where_clause: None,
+        };
+        executor.execute(update).unwrap();
+
+        let select = Statement::Select {
+            table: "test_coercion".to_string(),
+            projection: vec![SelectItem::Wildcard],
+            where_clause: None,
+            order_by: None,
+            limit: None,
+        };
+        let result = executor.execute(select).unwrap();
+
+        match result {
+            ExecutionResult::Selected { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].values[0], Value::Integer(42));
+                assert_eq!(rows[0].values[1], Value::Float(3.5));
+                assert_eq!(rows[0].values[2], Value::Boolean(false));
+                assert_eq!(rows[0].values[3], Value::Text("9".to_string()));
+            }
+            _ => panic!("Expected Selected result"),
+        }
+    }
+
+    #[test]
+    fn test_drop_table_removes_data_and_schema() {
+        let storage = StorageEngine::memory().unwrap();
+        let executor = Executor::new(storage);
+
+        let create = Statement::CreateTable {
+            name: "test_drop".to_string(),
+            columns: vec![Column {
+                name: "id".to_string(),
+                data_type: DataType::Integer,
+            }],
+        };
+        executor.execute(create).unwrap();
+
+        let insert = Statement::Insert {
+            table: "test_drop".to_string(),
+            columns: vec!["id".to_string()],
+            values: vec![vec![Value::Integer(1)]],
+        };
+        executor.execute(insert).unwrap();
+
+        let drop = Statement::DropTable {
+            name: "test_drop".to_string(),
+            if_exists: false,
+        };
+        let result = executor.execute(drop).unwrap();
+        match result {
+            ExecutionResult::Deleted { rows, .. } => {
+                assert_eq!(rows, 1);
+            }
+            _ => panic!("Expected Deleted result"),
+        }
+
+        let show = Statement::ShowTables;
+        let result = executor.execute(show).unwrap();
+        match result {
+            ExecutionResult::TableList { tables } => {
+                assert!(tables.is_empty());
+            }
+            _ => panic!("Expected TableList result"),
+        }
     }
 }

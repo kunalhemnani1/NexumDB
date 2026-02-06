@@ -2,6 +2,7 @@ use super::{Result, StorageError};
 use sled::Db;
 use std::path::Path;
 
+#[derive(Clone)]
 pub struct StorageEngine {
     db: Db,
 }

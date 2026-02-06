@@ -2,7 +2,7 @@ use nexum_core::{Catalog, Executor, NLTranslator, Parser, QueryExplainer, Storag
 use std::io::{self, Write};
 
 fn main() -> anyhow::Result<()> {
-    println!("NexumDB v0.2.0 - AI-Native Database with Natural Language Support");
+    println!("NexumDB v0.4.0 - AI-Native Database with Natural Language Support");
     println!("Initializing...\n");
 
     let storage = StorageEngine::new("./nexumdb_data")?;
@@ -32,7 +32,9 @@ fn main() -> anyhow::Result<()> {
     };
 
     println!("Ready. Commands:");
-    println!("  - SQL: Type any SQL query (CREATE TABLE, INSERT, SELECT)");
+    println!("  - SQL: Type any SQL query (CREATE, INSERT, SELECT, UPDATE, DELETE, DROP)");
+    println!("  - SHOW TABLES: List all tables");
+    println!("  - DESCRIBE <table>: Show table schema");
     println!("  - ASK: Type 'ASK <question>' for natural language queries");
     println!("  - EXPLAIN: Type 'EXPLAIN <query>' to see query execution plan");
     println!("  - EXIT: Type 'exit' or 'quit' to exit\n");

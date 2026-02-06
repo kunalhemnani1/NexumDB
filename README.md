@@ -12,6 +12,12 @@ An innovative, open-source database that combines traditional SQL with AI-powere
 
 ## Features
 
+### v0.4.0 - Core Correctness & Table Management
+- **Projection-Correct SELECT**: Column/alias projection with schema validation
+- **Schema-Safe Writes**: INSERT/UPDATE validation with best-effort coercion
+- **Table Management**: SHOW TABLES, DESCRIBE, DROP TABLE (IF EXISTS)
+- **Cache Safety**: Query cache keys include WHERE/ORDER/LIMIT + full invalidation on writes
+
 ### v0.3.0 - Advanced SQL & Persistent Learning
 - **Advanced SQL Operators**: LIKE (pattern matching), IN (list membership), BETWEEN (range queries)
 - **Query Modifiers**: ORDER BY (multi-column sorting), LIMIT (result truncation)
@@ -126,6 +132,8 @@ INSERT INTO users (id, name, age) VALUES (1, 'Alice', 30), (2, 'Bob', 25);
 
 -- Simple query
 SELECT * FROM users;
+SELECT id, name FROM users;
+SELECT name AS display_name FROM users;
 
 -- WHERE clause filtering (v0.2.0)
 SELECT * FROM users WHERE age > 25;
@@ -147,6 +155,15 @@ WHERE price BETWEEN 100 AND 500
   AND name LIKE 'L%'
 ORDER BY price DESC 
 LIMIT 10;
+
+-- Table management (v0.4.0)
+SHOW TABLES;
+DESCRIBE users;
+DROP TABLE IF EXISTS users;
+
+-- Data modification (v0.4.0)
+UPDATE users SET age = 31 WHERE id = 1;
+DELETE FROM users WHERE id = 2;
 ```
 
 ### Natural Language Queries (v0.2.0+)

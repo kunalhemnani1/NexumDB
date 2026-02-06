@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "nexum_cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "nexum_core",
@@ -406,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "nexum_core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "criterion",
