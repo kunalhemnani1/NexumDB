@@ -1,6 +1,6 @@
 {
     "packages": {
-        "nexum_core": {
+        ".": {
             "release-type": "simple",
             "changelog-path": "CHANGELOG.md",
             "include-component-in-tag": false,
