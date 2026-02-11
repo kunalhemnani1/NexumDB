@@ -194,15 +194,16 @@ Generated SQL: SELECT * FROM products WHERE price < 100 ORDER BY price ASC LIMIT
 ### Performance Examples
 
 **Advanced SQL Operators (v0.3.0):**
+
 ```sql
 -- LIKE patterns
-SELECT * FROM users WHERE name LIKE "%e"; -- ends with e
-SELECT * FROM users WHERE name LIKE "_l%"; -- second letter l
-SELECT * FROM products WHERE name NOT LIKE "%z%"; -- no z in name
+SELECT * FROM users WHERE name LIKE '%e'; -- ends with e
+SELECT * FROM users WHERE name LIKE '_l%'; -- second letter l
+SELECT * FROM products WHERE name NOT LIKE '%z%'; -- no z in name
 
 -- IN operator
-SELECT * FROM users WHERE age IN (30,40,50); -- specific ages
-SELECT * FROM products WHERE name NOT IN ('Alice','Bob'); -- exclude names
+SELECT * FROM users WHERE age IN (30, 40, 50); -- specific ages
+SELECT * FROM products WHERE name NOT IN ('Alice', 'Bob'); -- exclude names
 
 -- BETWEEN operator
 SELECT * FROM products WHERE price BETWEEN 100 AND 500; -- price range
@@ -215,18 +216,19 @@ SELECT * FROM products ORDER BY price LIMIT 3; -- sort and limit
 -- Combined queries
 SELECT * FROM products
 WHERE price BETWEEN 50 AND 1000 -- price filter
-  AND name LIKE "%apple%" -- pattern match
+  AND name LIKE '%apple%' -- pattern match
   AND category IN ('phones') -- category filter
 ORDER BY price DESC, name;
 
 SELECT * FROM users
 WHERE age NOT BETWEEN 30 AND 35 -- exclude age range
-  OR name IN ('Alice','foo') -- name condition
+  OR name IN ('Alice', 'foo') -- name condition
   AND age <= 50 -- extra condition
 ORDER BY name;
 ```
 
 **Query Modifiers:**
+
 ```sql
 Query: SELECT * FROM products ORDER BY price DESC LIMIT 5
 Sorted 150 rows using ORDER BY
